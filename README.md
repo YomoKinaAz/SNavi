@@ -4,10 +4,10 @@ OpenStreetMap を使ったオフラインのカーナビ **CTnavi**（Android、
 
 ## ダウンロード
 最新版は [Releases](../../releases/latest) にある。
-- `CTnavi.apk`: アプリ本体（Android 7.0 以上）
-- `00_base.ctm`: 全国の広域図（必須、約 0.2MB）
-- `21.ctm`, `23.ctm` など: 都道府県ごとの地図（番号は都道府県コード。21 = 岐阜県、23 = 愛知県）
+- `21.ctm`: 岐阜県の地図（21 は都道府県コード）
 - `index.json`: 配信一覧。アプリのダウンロード画面が読む
+
+いま配布しているのは岐阜県の地図だけ。
 
 ## 地図の入れ方
 1. **アプリから**: メニュー →「地図のダウンロード」→ 都道府県をタップ。配信元 URL の既定値は `https://github.com/YomoKinaAz/ctnavi/releases/latest/download/`。
@@ -16,7 +16,7 @@ OpenStreetMap を使ったオフラインのカーナビ **CTnavi**（Android、
 ## 地図データの作り方
 `tools/osm2pack.py` が Geofabrik の地方別 OSM データ（PBF）から県ごとの `.ctm` を作る。形式は `doc/format.md` を参照。
 
-GitHub Actions（`.github/workflows/maps.yml`）は、毎月 4 日に 8 地方を変換して Releases に置く。手動でも実行できる（Actions → build-maps → Run workflow）。
+GitHub Actions（`.github/workflows/maps.yml`）で 8 地方を変換して Releases に置ける。いまは無効にしてある。
 
 ```
 pip install osmium shapely mapbox_earcut numpy pillow
