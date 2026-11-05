@@ -1,0 +1,98 @@
+# 地図パックを毎月自動で作り、GitHub Releases に置く。
+# アプリの配信元 URL: https://github.com/<owner>/<repo>/releases/latest/download/
+name: build-maps
+
+on:
+  schedule:
+    - cron: "0 18 3 * *"   # 毎月 4 日 03:00 JST
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "作る地方（空なら全部）例: shikoku,kanto"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  region:
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [hokkaido, tohoku, kanto, chubu, kansai, chugoku, shikoku, kyushu]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - name: skip?
+        id: skip
+        run: |
+          R="${{ github.event.inputs.regions }}"
+          if [ -n "$R" ] && ! echo ",$R," | grep -q ",${{ matrix.region }},"; then echo "skip=1" >> $GITHUB_OUTPUT; fi
+      - uses: actions/checkout@v4
+        if: steps.skip.outputs.skip != '1'
+      - uses: actions/setup-python@v5
+        if: steps.skip.outputs.skip != '1'
+        with:
+          python-version: "3.12"
+      - name: install
+        if: steps.skip.outputs.skip != '1'
+        run: pip install osmium shapely mapbox_earcut numpy pillow
+      - name: download OSM
+        if: steps.skip.outputs.skip != '1'
+        run: |
+          mkdir -p data/src
+          curl -sSL --retry 3 -o data/src/${{ matrix.region }}.osm.pbf https://download.geofabrik.de/asia/japan/${{ matrix.region }}-latest.osm.pbf
+          ls -la data/src
+      - name: convert
+        if: steps.skip.outputs.skip != '1'
+        run: |
+          /usr/bin/time -v python tools/osm2pack.py data/src/${{ matrix.region }}.osm.pbf --out out/packs --work out/work 2>&1 | tee out-${{ matrix.region }}.log | grep -vE "^\s+(Page|Volun|Invol|Swaps|File|Socket|Signals|Exit)" | tail -60
+          rm -f data/src/*.pbf
+      - uses: actions/upload-artifact@v4
+        if: steps.skip.outputs.skip != '1'
+        with:
+          name: region-${{ matrix.region }}
+          path: out/
+          retention-days: 3
+
+  publish:
+    needs: region
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install osmium shapely mapbox_earcut numpy pillow
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: region-*
+          path: art
+      - name: collect
+        run: |
+          mkdir -p out/packs out/work
+          # 今回作らなかった地方は、前回のリリースの分をそのまま使う
+          gh release download --pattern "*.ctm" --dir out/packs || true
+          gh release download --pattern "work.tar" --dir . && tar xf work.tar -C out/work || true
+          # アプリ（apk）は前回のリリースのものを引き継ぐ
+          gh release download --pattern "CTnavi.apk" --dir . || true
+          for d in art/region-*; do cp -f $d/packs/*.ctm out/packs/ 2>/dev/null || true; cp -f $d/work/*.pkl out/work/ 2>/dev/null || true; done
+          rm -f out/packs/00_base.ctm
+          python tools/makebase.py --work out/work --out out/packs
+          python tools/mkindex.py out/packs
+          tar cf work.tar -C out/work .
+          ls -la out/packs
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: release
+        run: |
+          TAG=maps-$(date +%Y%m%d-%H%M)
+          APK=""; [ -f CTnavi.apk ] && APK=CTnavi.apk
+          gh release create "$TAG" out/packs/*.ctm out/packs/index.json work.tar $APK \
+            --title "地図データ $(date +%Y-%m-%d)" \
+            --notes "OpenStreetMap（© OpenStreetMap contributors, ODbL）から作成した CTnavi 用の都道府県別地図。アプリの配信元 URL: https://github.com/${{ github.repository }}/releases/latest/download/" \
+            --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
