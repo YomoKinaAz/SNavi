@@ -1,6 +1,6 @@
-# CTnavi — 地図データとアプリの配布
+# SNavi — 地図データとアプリの配布
 
-OpenStreetMap を使ったオフラインのカーナビ **CTnavi**（Android、1280×720 の車載機向け）の配布用リポジトリ。
+OpenStreetMap を使ったオフラインのカーナビ **SNavi**（Android、1280×720 の車載機向け）の配布用リポジトリ。
 
 ## ダウンロード
 最新版は [Releases](../../releases/latest) にある。
@@ -11,7 +11,7 @@ OpenStreetMap を使ったオフラインのカーナビ **CTnavi**（Android、
 いま配布している都道府県の地図は岐阜県と愛知県。
 
 ## 地図の入れ方
-1. **アプリから**: メニュー →「地図のダウンロード」→ 都道府県をタップ。配信元 URL の既定値は `https://github.com/YomoKinaAz/ctnavi/releases/latest/download/`。
+1. **アプリから**: メニュー →「地図のダウンロード」→ 都道府県をタップ。配信元 URL の既定値は `https://github.com/YomoKinaAz/SNavi/releases/latest/download/`。
 2. **ファイルから**: `.ctm` を USB メモリなどにコピーし、「地図のダウンロード」→「ファイルから追加」で選ぶ（複数まとめて選べる）。
 
 ## 地図データの作り方
