@@ -1,4 +1,4 @@
-"""Shared helpers for the CTnavi map pack format (.ctm v1). See ../doc/format.md."""
+"""Shared helpers for the SNavi map pack format (.ctm v1). See ../doc/format.md."""
 import math, struct, zlib, tempfile, os
 import numpy as np
 import shapely

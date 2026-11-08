@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OSM region extract (.osm.pbf) -> per-prefecture CTnavi packs (NN.ctm). See ../doc/format.md.
+"""OSM region extract (.osm.pbf) -> per-prefecture SNavi packs (NN.ctm). See ../doc/format.md.
 
 usage: python osm2pack.py data/src/kanto-latest.osm.pbf [--out data/packs] [--work data/work] [--prefs 13,14]
                           [--index flex_mem|sparse_file_array,PATH]

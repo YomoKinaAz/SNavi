@@ -77,7 +77,7 @@ jobs:
           gh release download --pattern "*.ctm" --dir out/packs || true
           gh release download --pattern "work.tar" --dir . && tar xf work.tar -C out/work || true
           # アプリ（apk）は前回のリリースのものを引き継ぐ
-          gh release download --pattern "CTnavi.apk" --dir . || true
+          gh release download --pattern "SNavi.apk" --dir . || true
           for d in art/region-*; do cp -f $d/packs/*.ctm out/packs/ 2>/dev/null || true; cp -f $d/work/*.pkl out/work/ 2>/dev/null || true; done
           rm -f out/packs/00_base.ctm
           python tools/makebase.py --work out/work --out out/packs
@@ -89,10 +89,10 @@ jobs:
       - name: release
         run: |
           TAG=maps-$(date +%Y%m%d-%H%M)
-          APK=""; [ -f CTnavi.apk ] && APK=CTnavi.apk
+          APK=""; [ -f SNavi.apk ] && APK=SNavi.apk
           gh release create "$TAG" out/packs/*.ctm out/packs/index.json work.tar $APK \
             --title "地図データ $(date +%Y-%m-%d)" \
-            --notes "OpenStreetMap（© OpenStreetMap contributors, ODbL）から作成した CTnavi 用の都道府県別地図。アプリの配信元 URL: https://github.com/${{ github.repository }}/releases/latest/download/" \
+            --notes "OpenStreetMap（© OpenStreetMap contributors, ODbL）から作成した SNavi 用の都道府県別地図。アプリの配信元 URL: https://github.com/${{ github.repository }}/releases/latest/download/" \
             --latest
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,4 +1,4 @@
-# CTnavi 地図パック形式（.ctm, version 1）
+# SNavi 地図パック形式（.ctm, version 1）
 
 すべてリトルエンディアン。PC側 `tools/osm2pack.py` が作り、アプリ `com.ctnavi.Pack` が読む。
 
