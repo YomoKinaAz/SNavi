@@ -1,6 +1,6 @@
 # SNavi 地図パック形式（.ctm, version 1）
 
-すべてリトルエンディアン。PC側 `tools/osm2pack.py` が作り、アプリ `com.ctnavi.Pack` が読む。
+すべてリトルエンディアン。PC側 `tools/osm2pack.py` が作り、アプリ `com.snavi.Pack` が読む。
 
 ## 座標
 - ワールド座標（int32）: Web メルカトルを 0..2^31 に正規化。
