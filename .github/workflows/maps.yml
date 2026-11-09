@@ -37,6 +37,6 @@ jobs:
       # GitHub は更新のないリポジトリの定期実行を 60 日で止めるので、毎回有効にし直す
       - name: keep schedule alive
         if: always()
-        run: gh workflow enable build-maps
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/maps.yml/enable"
         env:
           GH_TOKEN: ${{ github.token }}
