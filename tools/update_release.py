@@ -47,6 +47,7 @@ def sha1(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--prefs', default='', help='作る県を絞る（例: 21,23）。空なら配信中の県すべて')
     a = ap.parse_args()
 
     os.makedirs('out/packs', exist_ok=True)
@@ -59,6 +60,11 @@ def main():
         index = json.load(f)
     packs = {p['code']: p for p in index['packs']}
     wanted = sorted(c for c in packs if 1 <= c <= 47)
+    if a.prefs:
+        only = {int(v) for v in a.prefs.split(',')}
+        if not only <= set(wanted):
+            raise ValueError('配信していない県は指定できません: %s' % sorted(only - set(wanted)))
+        wanted = sorted(only)
     print('配信中の県:', wanted, flush=True)
 
     ready = []

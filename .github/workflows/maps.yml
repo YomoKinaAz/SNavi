@@ -11,6 +11,10 @@ on:
         description: "作って確認するだけ（アップロードしない）"
         type: boolean
         default: false
+      prefs:
+        description: "作る県を絞る（例: 21,23）。空なら配信中の県すべて"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -27,7 +31,7 @@ jobs:
           python-version: "3.12"
       - run: pip install osmium shapely mapbox_earcut numpy pillow
       - name: update maps
-        run: python tools/update_release.py ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: python tools/update_release.py ${{ inputs.dry_run && '--dry-run' || '' }} ${{ inputs.prefs && format('--prefs {0}', inputs.prefs) || '' }}
         env:
           GH_TOKEN: ${{ github.token }}
       # GitHub は更新のないリポジトリの定期実行を 60 日で止めるので、毎回有効にし直す
