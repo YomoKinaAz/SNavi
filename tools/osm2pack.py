@@ -64,6 +64,48 @@ def reading_of(t):
 
 
 # ---------------------------------------------------------------- pass 1: prefecture boundaries
+def load_munis(pbf):
+    """市町村（admin_level=7）と政令市の区（8）の境界 -> [(level, name, geometry)]"""
+    fab = osmium.geom.WKBFactory()
+    fp = (osmium.FileProcessor(pbf).with_areas(osmium.filter.TagFilter(('admin_level', '7'), ('admin_level', '8')))
+          .with_filter(osmium.filter.EntityFilter(osmium.osm.AREA)))
+    out = []
+    for a in fp:
+        t = a.tags
+        if a.from_way() or t.get('boundary') != 'administrative' or not t.get('name'):
+            continue
+        try:
+            g = shapely.from_wkb(fab.create_multipolygon(a))
+        except Exception:
+            continue
+        out.append((int(t.get('admin_level')), t.get('name'), shapely.make_valid(shapely.transform(g, world_xy_transform))))
+    return out
+
+
+def encode_munis(munis, P, wpm):
+    """その県の中の市区町村（代表点が県の中）。およそ 30m で簡略化。"""
+    shapely.prepare(P)
+    rows = []
+    for level, name, g in munis:
+        if not shapely.contains(P, g.point_on_surface()):
+            continue
+        rings = []
+        for pg in polygons_of(shapely.simplify(g, 30 * wpm)):
+            for r in [pg.exterior] + list(pg.interiors):
+                c = shapely.get_coordinates(r)
+                if len(c) >= 4:
+                    rings.append(np.round(c[:-1]).astype('<i4'))
+        if rings:
+            rows.append((level, name.encode('utf-8'), rings))
+    out = bytearray(struct.pack('<I', len(rows)))
+    for level, nb, rings in rows:
+        out += struct.pack('<BH', level, len(nb)) + nb + struct.pack('<H', len(rings))
+        for c in rings:
+            out += struct.pack('<I', len(c)) + c.tobytes()
+    log('  MUNI: %d boundaries, %.0f KB' % (len(rows), len(out) / 1024))
+    return bytes(out)
+
+
 def load_prefs(pbf, wanted):
     fab = osmium.geom.WKBFactory()
     fp = (osmium.FileProcessor(pbf).with_areas(osmium.filter.TagFilter(('admin_level', '4')))
@@ -241,6 +283,8 @@ class Store:
         self.L_wid = array('q')  # OSM way id per line
         self.cond = {}           # line index -> 21-byte week mask (closed hours) for motor vehicles
         self.restr = []          # (only?, from way, via node, to way)
+        self.restr_v = []        # (only?, from way, [via ways], to way)
+        self.lane_n = {}         # line index -> (forward lanes, backward lanes), only >=2
         self.lanes = {}          # line index -> (forward turn:lanes, backward turn:lanes)          # (node id, x, y) of Smart IC (ETC-only) motorway_junction nodes
 
     def name_idx(self, n):
@@ -321,6 +365,27 @@ def cond_mask(value, mask=None):
     return mask
 
 
+def is_narrow(t, cls, ow):
+    """細い道: 生活道路など、対面通行で 1 車線、中央線なし、幅 4.5m 未満（タグがあるときだけ）"""
+    if cls >= 5 and t.get('highway') != 'unclassified':
+        return True
+    if ow == 0 and parse_lane_count(t.get('lanes')) == 1:
+        return True
+    if t.get('lane_markings') == 'no' or t.get('narrow') == 'yes':
+        return True
+    try:
+        return float((t.get('width') or '').replace('m', '').strip()) < 4.5
+    except ValueError:
+        return False
+
+
+def parse_lane_count(v):
+    try:
+        return max(0, min(255, int(v)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def poi_cat(t, name):
     a = t.get('amenity'); hw = t.get('highway')
     if '道の駅' in (name or '') or (hw == 'services' and t.get('services') == 'michi_no_eki'):
@@ -398,6 +463,9 @@ def load_restrictions(pbf, st):
         fr = [m.ref for m in r.members if m.type == 'w' and m.role == 'from']
         to = [m.ref for m in r.members if m.type == 'w' and m.role == 'to']
         via = [m for m in r.members if m.role == 'via']
+        if len(fr) == 1 and len(to) == 1 and via and all(m.type == 'w' for m in via):
+            st.restr_v.append((rv.startswith('only_'), fr[0], [m.ref for m in via], to[0]))
+            continue
         if len(fr) != 1 or len(to) != 1 or len(via) != 1 or via[0].type != 'n':
             continue
         st.restr.append((rv.startswith('only_'), fr[0], via[0].ref, to[0]))
@@ -610,6 +678,7 @@ def run_main_pass(pbf, A, st, index):
                 if flags & 2: efl |= 8
                 if junc in ('roundabout', 'circular'): efl |= 16
                 if link: efl |= 32
+                if is_narrow(t, cls, ow): efl |= 128
             ms = parse_m(t.get('maxspeed'))
             st.L_start.append(len(st.IDS)); st.L_n.append(len(arr)); st.L_cls.append(cls); st.L_flags.append(flags)
             st.L_name.append(st.name_idx(t.get('name') or t.get('ref') if cls <= 6 else t.get('name')))
@@ -627,6 +696,18 @@ def run_main_pass(pbf, A, st, index):
                         lf, lb = tf, tb
                     if lf or lb:
                         st.lanes[len(st.L_n) - 1] = (lf, lb)
+                # direction lane count (>=2 only; a missing value means 1 lane or unknown)
+                total = parse_lane_count(t.get('lanes'))
+                nf = parse_lane_count(t.get('lanes:forward'))
+                nb = parse_lane_count(t.get('lanes:backward'))
+                if ow == 1:
+                    nf, nb = nf or total, 0
+                elif ow == -1:
+                    nf, nb = 0, nb or total
+                else:
+                    nf, nb = nf or total // 2, nb or total // 2
+                if nf >= 2 or nb >= 2:
+                    st.lane_n[len(st.L_n) - 1] = (nf, nb)
             if cls <= 6:
                 cm = None
                 for ck in COND_KEYS:
@@ -987,6 +1068,51 @@ def build_regulations(st, sel, seg_way, seg_idx, e_from, e_to, firstEdge, gid, e
     for f, t in pl:
         tres += struct.pack('<II', f, t)
     log('  TRES: %d restrictions mapped -> %d forbidden turns; TCON: %d conditional edges' % (nok, len(pl), len(tcon_e)))
+    # --- TRSV: via が way の禁止。from の辺 → via の辺（順に） → to の辺、の並びを通らせない
+    seqs = set()
+    nokv = 0
+    restr_v = getattr(st, 'restr_v', [])
+    if restr_v and len(wid):
+        wpos = {int(w): i for i, w in enumerate(wid.tolist())}
+        by_way = {}
+        for e, w in enumerate(e_way.tolist()):
+            by_way.setdefault(w, []).append(e)
+
+        def outs_of(n):
+            return range(int(firstEdge[n]), int(firstEdge[n + 1]))
+
+        for only, fw, vws, tw in restr_v:
+            fl = wpos.get(fw); tl = wpos.get(tw); vl = [wpos.get(v) for v in vws]
+            if fl is None or tl is None or None in vl:
+                continue
+            found = False
+            for f in by_way.get(fl, []):
+                # 深さ優先で via を順にたどる（via の辺は 12 本まで）
+                stack = [([f], 0)]
+                while stack:
+                    chain, vi = stack.pop()
+                    if len(chain) > 13:
+                        continue
+                    last = chain[-1]
+                    for e in outs_of(int(e_to[last])):
+                        if e_to[e] == e_from[last] and e_way[e] == e_way[last]:
+                            continue  # 同じ道を戻らない
+                        w = int(e_way[e])
+                        if vi < len(vl) and w == vl[vi]:
+                            stack.append((chain + [e], vi))
+                        elif vi + 1 < len(vl) and w == vl[vi + 1] and len(chain) > 1:
+                            stack.append((chain + [e], vi + 1))
+                        elif vi == len(vl) - 1 and len(chain) > 1:
+                            if not only and w == tl:
+                                seqs.add(tuple(chain + [e])); found = True
+                            elif only and w != tl and w != vl[vi]:
+                                seqs.add(tuple(chain + [e])); found = True
+            if found:
+                nokv += 1
+    trsv = bytearray(struct.pack('<I', len(seqs)))
+    for q in sorted(seqs):
+        trsv += struct.pack('<H', len(q)) + struct.pack('<%dI' % len(q), *q)
+    log('  TRSV: %d via-way restrictions mapped -> %d forbidden sequences' % (nokv, len(seqs)))
     # --- LANE
     lanes = getattr(st, 'lanes', {})
     lane_e = []
@@ -1002,7 +1128,23 @@ def build_regulations(st, sel, seg_way, seg_idx, e_from, e_to, firstEdge, gid, e
     for e, v in lane_e:
         lane += struct.pack('<IH', e, len(v)) + v
     log('  LANE: %d directed edges with turn:lanes' % len(lane_e))
-    return bytes(tres), bytes(tcon), bytes(lane)
+    # --- LCNT
+    lane_n = getattr(st, 'lane_n', {})
+    lcnt_e = []
+    if lane_n:
+        loc = {i: lane_n[int(g)] for i, g in enumerate(sel.tolist()) if int(g) in lane_n}
+        if loc:
+            hit = np.nonzero(np.isin(e_way, np.array(list(loc.keys()))))[0]
+            for e in hit.tolist():
+                v = loc[int(e_way[e])][1 if e_rev[e] else 0]
+                if v >= 2:
+                    lcnt_e.append((e, v))
+    lcnt_e.sort()
+    lcnt = bytearray(struct.pack('<I', len(lcnt_e)))
+    for e, v in lcnt_e:
+        lcnt += struct.pack('<IB', e, v)
+    log('  LCNT: %d directed edges with 2+ lanes' % len(lcnt_e))
+    return bytes(tres), bytes(tcon), bytes(lane), bytes(lcnt), bytes(trsv)
 
 
 def build_rout(st, code, sel_all, P, signals):
@@ -1069,7 +1211,7 @@ def build_rout(st, code, sel_all, P, signals):
     E['name'] = E_nm[sel_e]; E['ms'] = E_ms[sel_e]
     firstEdge = np.searchsorted(E_from[sel_e], np.arange(nN + 1)).astype('<u4')
     gid = uniq[isg]
-    tres, tcon, lane = build_regulations(st, sel, part[a], np.concatenate([fwd.nonzero()[0], bwd.nonzero()[0]])[sel_e],
+    tres, tcon, lane, lcnt, trsv = build_regulations(st, sel, part[a], np.concatenate([fwd.nonzero()[0], bwd.nonzero()[0]])[sel_e],
                                          E_from[sel_e], E_to[sel_e], firstEdge, gid, (E_fl[sel_e] & 1) != 0)
     gxy = xy[first[isg]]
     # flags
@@ -1119,7 +1261,7 @@ def build_rout(st, code, sel_all, P, signals):
     out += noff.tobytes() + nb
     log('  ROUT: %d nodes, %d edges (%d ETC-only), %d pts, %d names, %.1f MB' % (
         nN, nE, int(((E['fl'] & 64) != 0).sum()), npt, len(names), len(out) / 1e6))
-    return bytes(out), tres, tcon, lane, bytes(jnam)
+    return bytes(out), tres, tcon, lane, lcnt, trsv, bytes(jnam)
 
 
 def process_pref(code, name, P, st, out_dir, work_dir, date):
@@ -1191,7 +1333,7 @@ def process_pref(code, name, P, st, out_dir, work_dir, date):
                                              buildings=st.bld.get(code) if z == 14 else None):
             tiles.add(z, tx, ty, raw)
         log('  z%d: %d candidate tiles -> %d tiles' % (z, len(cand), len(tiles.idx) - n0))
-    rout, tres, tcon, lane, jnam = build_rout(st, code, sel_all, P, st.signals)
+    rout, tres, tcon, lane, lcnt, trsv, jnam = build_rout(st, code, sel_all, P, st.signals)
     srch = encode_srch([(p[0], p[1], p[2], p[3], p[4]) for p in pts_p] + [(lp.x, lp.y, 0, name, '')])
     poic = bytes(struct.pack('<I', len(pts_p) + 1) + bytes([p[7] if len(p) > 7 else 0xFF for p in pts_p] + [0xFF]))
     path = os.path.join(out_dir, '%02d.ctm' % code)
@@ -1203,7 +1345,8 @@ def process_pref(code, name, P, st, out_dir, work_dir, date):
         cb += struct.pack('<iihBB', int(round(x)), int(round(y)), int(deg), ty, ms)
     log('  CAMS: %d cameras' % len(cams))
     write_ctm(path, code, name, P.bounds, date, tiles, rout=rout, srch=srch, cams=bytes(cb),
-              extra=[('TRES', tres), ('TCON', tcon), ('LANE', lane), ('POIC', poic), ('JNAM', jnam)])
+              extra=[('TRES', tres), ('TCON', tcon), ('LANE', lane), ('LCNT', lcnt), ('POIC', poic), ('JNAM', jnam),
+                     ('TRSV', trsv), ('MUNI', encode_munis(st.munis, P, wpm))])
     log('  wrote %s %.1f MB (tiles raw %.1f MB)' % (path, os.path.getsize(path) / 1e6, tiles.raw / 1e6))
     # intermediate for the base pack
     t60 = 60 * wpm
@@ -1262,6 +1405,8 @@ def main():
         if a.reuse:
             with open(cache, 'wb') as f:
                 pickle.dump(st, f, protocol=pickle.HIGHEST_PROTOCOL)
+    st.munis = load_munis(a.pbf)
+    log('boundaries: %d municipalities and wards' % len(st.munis))
     st.jnames, sig2, st.lx, st.stops = load_junction_tags(a.pbf)
     st.signals = sig2
     log('junction tags: %d named intersections, %d signals, %d level crossings, %d stop signs' % (
