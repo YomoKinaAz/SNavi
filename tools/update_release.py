@@ -13,13 +13,24 @@ import os
 import struct
 import subprocess
 import sys
-import urllib.request
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGIONS = {'hokkaido': [1], 'tohoku': list(range(2, 8)), 'kanto': list(range(8, 15)),
            'chubu': list(range(15, 24)), 'kansai': list(range(24, 31)), 'chugoku': list(range(31, 36)),
            'shikoku': list(range(36, 40)), 'kyushu': list(range(40, 48))}
 MIN_RATIO = 0.7   # 配信中より極端に小さいファイルは壊れているとみなす
+
+
+def download(url, path):
+    """一時的な通信エラーでは止まらないよう、IPv4 で何度か試す（GitHub の実行環境では IPv6 がつながらないことがある）"""
+    for i in range(5):
+        r = subprocess.run(['curl', '-4', '-fsSL', '--retry', '5', '--retry-delay', '30', '--retry-all-errors', '-o', path, url])
+        if r.returncode == 0 and os.path.getsize(path) > 0:
+            return
+        print('download failed (%d), retry' % r.returncode, flush=True)
+        time.sleep(60)
+    raise RuntimeError('download failed: ' + url)
 
 
 def gh(*args):
@@ -74,7 +85,7 @@ def main():
             continue
         pbf = 'data/src/%s.osm.pbf' % region
         print('download', region, flush=True)
-        urllib.request.urlretrieve('https://download.geofabrik.de/asia/japan/%s-latest.osm.pbf' % region, pbf)
+        download('https://download.geofabrik.de/asia/japan/%s-latest.osm.pbf' % region, pbf)
         subprocess.run([sys.executable, os.path.join(HERE, 'osm2pack.py'), pbf, '--out', 'out/packs', '--work', 'out/work',
                         '--prefs', ','.join(map(str, prefs))], check=True)
         os.remove(pbf)
