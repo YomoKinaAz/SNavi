@@ -22,15 +22,24 @@ REGIONS = {'hokkaido': [1], 'tohoku': list(range(2, 8)), 'kanto': list(range(8, 
 MIN_RATIO = 0.7   # 配信中より極端に小さいファイルは壊れているとみなす
 
 
-def download(url, path):
-    """一時的な通信エラーでは止まらないよう、IPv4 で何度か試す（GitHub の実行環境では IPv6 がつながらないことがある）"""
-    for i in range(5):
-        r = subprocess.run(['curl', '-4', '-fsSL', '--retry', '5', '--retry-delay', '30', '--retry-all-errors', '-o', path, url])
-        if r.returncode == 0 and os.path.getsize(path) > 0:
-            return
-        print('download failed (%d), retry' % r.returncode, flush=True)
-        time.sleep(60)
-    raise RuntimeError('download failed: ' + url)
+MIRRORS = ['https://download.geofabrik.de/asia/japan/%s-latest.osm.pbf',
+           'https://download.openstreetmap.fr/extracts/asia/japan/%s-latest.osm.pbf']
+
+
+def download(region, path):
+    """一時的な通信エラーでは止まらないよう、IPv4 で何度か試す。
+    Geofabrik に GitHub の実行環境からつながらない日があるので、だめなら別の配布元（openstreetmap.fr）から取る"""
+    for rnd in range(3):
+        for m in MIRRORS:
+            url = m % region
+            print('download', url, flush=True)
+            r = subprocess.run(['curl', '-4', '-fsSL', '--connect-timeout', '30', '--retry', '3', '--retry-delay', '20',
+                                '--retry-all-errors', '-o', path, url])
+            if r.returncode == 0 and os.path.exists(path) and os.path.getsize(path) > 1000000:
+                return
+            print('download failed (%d)' % r.returncode, flush=True)
+        time.sleep(300)
+    raise RuntimeError('download failed: ' + region)
 
 
 def gh(*args):
@@ -85,7 +94,7 @@ def main():
             continue
         pbf = 'data/src/%s.osm.pbf' % region
         print('download', region, flush=True)
-        download('https://download.geofabrik.de/asia/japan/%s-latest.osm.pbf' % region, pbf)
+        download(region, pbf)
         subprocess.run([sys.executable, os.path.join(HERE, 'osm2pack.py'), pbf, '--out', 'out/packs', '--work', 'out/work',
                         '--prefs', ','.join(map(str, prefs))], check=True)
         os.remove(pbf)
