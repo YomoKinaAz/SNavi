@@ -5,8 +5,11 @@
 OSM のデータが配信中のものより新しくない県は差し替えない。
 
     python tools/update_release.py [--dry-run]      # --dry-run は作って確認するだけで、アップロードしない
+
+定期実行では曜日ごとに担当の地域だけを作る（WEEKLY）。手動実行では配信中の県すべて（--prefs で絞れる）。
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -19,6 +22,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REGIONS = {'hokkaido': [1], 'tohoku': list(range(2, 8)), 'kanto': list(range(8, 15)),
            'chubu': list(range(15, 24)), 'kansai': list(range(24, 31)), 'chugoku': list(range(31, 36)),
            'shikoku': list(range(36, 40)), 'kyushu': list(range(40, 48))}
+# 定期実行（毎日 03:00 JST）では、曜日ごとに 1 地域ずつ作り直す。各地域は 1 週間に 1 回更新される
+WEEKLY = {6: ['hokkaido'], 0: ['tohoku'], 1: ['kanto'], 2: ['chubu'], 3: ['kansai'],
+          4: ['chugoku', 'shikoku'], 5: ['kyushu']}   # 日 北海道・月 東北・火 関東・水 中部・木 関西・金 中国四国・土 九州
 MIN_RATIO = 0.7   # 配信中より極端に小さいファイルは壊れているとみなす
 
 
@@ -85,7 +91,12 @@ def main():
         if not only <= set(wanted):
             raise ValueError('配信していない県は指定できません: %s' % sorted(only - set(wanted)))
         wanted = sorted(only)
-    print('配信中の県:', wanted, flush=True)
+    elif os.environ.get('GITHUB_EVENT_NAME') == 'schedule':
+        jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+        today = WEEKLY[jst.weekday()]
+        wanted = [c for c in wanted if any(c in REGIONS[r] for r in today)]
+        print('今日（%s）の地域:' % '月火水木金土日'[jst.weekday()], today, flush=True)
+    print('作る県:', wanted, flush=True)
 
     ready = []
     for region, codes in REGIONS.items():
